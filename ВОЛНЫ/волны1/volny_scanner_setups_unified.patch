@@ -1,0 +1,107 @@
+diff --git a/scanner.py b/scanner.py
+--- a/scanner.py
++++ b/scanner.py
+@@
+-WORKING_TIMEFRAMES = ("15", "5")
++WORKING_TIMEFRAMES = ("15",)
+@@
+     def _deduplicate_setups(self, setups: Iterable[TradeSetup]) -> list[TradeSetup]:
+         quality_order = {"A+": 0, "A": 1, "B": 2, "C": 3}
+         best_by_key: dict[tuple, TradeSetup] = {}
+@@
+         ordered = list(best_by_key.values())
+         ordered.sort(key=lambda s: quality_order.get(getattr(s, "quality", "C"), 99))
+         return ordered
++
++    def _filter_high_quality_setups(self, setups: list[TradeSetup]) -> list[TradeSetup]:
++        filtered: list[TradeSetup] = []
++        for setup in setups:
++            if not getattr(setup, "is_valid", False):
++                continue
++            if getattr(setup, "quality", "") != "A+":
++                continue
++            if float(getattr(setup, "score", 0.0) or 0.0) < 90.0:
++                continue
++            filtered.append(setup)
++        return filtered
+@@
+-        deduped = self._deduplicate_setups(all_setups)
+-
+-        if deduped:
+-            await self._process_setups(deduped)
++        deduped = self._deduplicate_setups(all_setups)
++        filtered = self._filter_high_quality_setups(deduped)
++
++        if filtered:
++            await self._process_setups(filtered)
+ 
+         logger.info(
+-            "Сканирование #{}: symbols_scanned={} raw_setups={} deduped_setups={}",
++            "Сканирование #{}: symbols_scanned={} raw_setups={} deduped_setups={} filtered_setups={}",
+             self.scan_count,
+             len(scan_tasks),
+             len(all_setups),
+             len(deduped),
++            len(filtered),
+         )
+diff --git a/setups.py b/setups.py
+--- a/setups.py
++++ b/setups.py
+@@
+ class SetupDetector:
+     def __init__(self) -> None:
+         self.wave_analyzer = WaveAnalyzer()
+         self.trendline_analyzer = TrendlineAnalyzer()
+         self.risk_manager = RiskManager()
++        self.min_score_threshold = 90.0
++        self.min_move_threshold = max(MIN_MOVE_PCT, 2.5)
++        self.min_rr_threshold = max(MIN_RR_RATIO, 2.5)
+@@
+-            if move_pct < MIN_MOVE_PCT:
++            if move_pct < self.min_move_threshold:
+                 return setups
+@@
+-            if rr_tp2 < MIN_RR_RATIO:
++            if rr_tp2 < self.min_rr_threshold:
+                 return setups
+@@
+-            setup = TradeSetup(
++            score = 80.0
++            if move_pct >= 3.0:
++                score += 5.0
++            if rr_tp2 >= 3.0:
++                score += 5.0
++            if stop_loss_pct <= 1.5:
++                score += 5.0
++            score = min(score, 100.0)
++
++            quality = "A+" if score >= self.min_score_threshold else "A"
++
++            setup = TradeSetup(
+                 symbol=symbol,
+                 timeframe=timeframe_working,
+                 direction=direction,
+                 setup_type="setup_1",
+                 entry_price=entry_price,
+                 stop_loss=stop_loss,
+                 tp1_price=tp1,
+                 tp2_price=tp2,
+                 position_size_pct=position_size_pct,
+-                quality="A",
+-                score=80.0,
++                quality=quality,
++                score=score,
+                 trendline_broken=trendline_broken,
+                 breakout_level=breakout_level,
+-                is_valid=True,
++                is_valid=(quality == "A+" and score >= self.min_score_threshold),
+                 rr_ratio=rr_tp2,
+                 stop_loss_pct=stop_loss_pct,
+                 expected_move_pct=move_pct,
+                 features=features,
+             )
+ 
+-            setups.append(setup)
++            if setup.is_valid:
++                setups.append(setup)
+             return setups
